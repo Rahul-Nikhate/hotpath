@@ -25,7 +25,10 @@ echo "== demo: $COUNT msgs @ $RATE/s, ${DROP} datagram loss, session drop after 
 $B/hp_sim --count "$COUNT" --rate "$RATE" --drop "$DROP" --disconnect-after "$DISC" ${SIM_ARGS:-} \
     > "$OUT/sim.txt" 2>&1 & SIM=$!
 $B/hp_engine --name "$NAME" --csv "$OUT/latency.csv" ${ENGINE_ARGS:-} > "$OUT/engine.txt" 2>&1 & ENG=$!
-$B/hp_control --name "$NAME" --journal "$OUT/journal.bin" --quiet ${CONTROL_ARGS:-} > "$OUT/control.txt" 2>&1 & CTL=$!
+# The control process must look where the engine put the region (hugetlbfs vs /dev/shm).
+HUGE_FLAG=""
+case " ${ENGINE_ARGS:-} " in *" --huge "*) HUGE_FLAG="--huge" ;; esac
+$B/hp_control --name "$NAME" --journal "$OUT/journal.bin" --quiet $HUGE_FLAG ${CONTROL_ARGS:-} > "$OUT/control.txt" 2>&1 & CTL=$!
 
 rc=0
 wait $ENG || rc=$?

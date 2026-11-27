@@ -62,13 +62,31 @@ This checks that the code is correct on Linux, not how fast it is (it's a virtua
 - The 3-process demo recovers 1,400 gaps, survives the injected disconnect, matches the exchange's book hash, and replays **identically**.
 - Page-fault experiment on 4 KB pages: **65,536 faults lazy vs 0 pre-faulted** (16.7 vs 1.1 ns per record on first touch).
 - libFuzzer with ASan/UBSan ran **11.9 million** order-entry inputs in 30 s with no crash.
-- Huge pages and core isolation need a real host (below).
+- **Huge pages, measured** (2 MB pages reserved in the Linux VM, hugetlbfs mounted), 256 MB region:
+
+  | Variant | First touch | Random read | Minor faults |
+  |---|---|---|---|
+  | 4 KB pages, lazy | 26.4 ns/record | 11.4 ns | 65,536 |
+  | 4 KB pages, pre-faulted | 1.4 ns/record | 9.4 ns | 0 |
+  | **2 MB huge pages** | 1.2 ns/record | **8.1 ns** | 0 |
+
+  Random reads are ~14% faster on 2 MB pages than on pre-faulted 4 KB pages: TLB reach, since each TLB entry covers 512× more memory. The full system also runs end to end with the engine on huge pages, pinned to a core and `mlockall`ed (`ENGINE_ARGS="--huge --cpu 1" scripts/run_demo.sh`): book hash matches, replay identical. That run **found a bug in the demo script** (the control process wasn't told to look on hugetlbfs, so the engine correctly refused to trade); it's fixed.
+
+### Profiling: Valgrind callgrind (Linux VM)
+
+`valgrind --tool=callgrind ./build/hp_bench fastpath`, which counts instructions per function. It needs no hardware counters, so it works inside a VM.
+
+| Finding | Share | Action |
+|---|---|---|
+| `steady_clock::now()` called on **every** loop iteration, though the loop only needs time for ~100 µs maintenance ticks | ~7% of the engine's instructions | **Fixed:** the loop checks the CPU cycle counter (one register read) and reads the clock only when maintenance is due. Total instructions **−4.3%**, clock-read instructions **−73%** |
+| `malloc`/`free`/`operator new` from project 1's `std::map`/`unordered_map` order book | ~12% of the engine's instructions | Now the top hotspot: the flat price-array plus pool rewrite is the next step |
+| Latency histogram recording | ~9% | The cost of measuring itself: expected, and kept |
 
 ### Not measured yet: bare-metal x86 Linux
 
 **Not yet measured:**
 - Experiment 4 (core isolation with `isolcpus` / `nohz_full` / IRQ affinity)
-- the 2 MB huge-page row of experiment 2
+- hardware TLB-miss counters for the huge-page result (`perf stat -e dTLB-load-misses`; a VM on a Mac doesn't expose them)
 - an x86 TSC-resolution re-run of experiments 1 and 3
 
 These need a bare-metal x86 Linux host, which I haven't had access to. The scripts are complete and checked to build and run on Linux: `scripts/tune_linux.sh`, then `ISOLATED=3 CPUS=3,5 HUGE=1 scripts/run_experiments.sh`. I'm not quoting numbers I haven't measured. See [What I did and didn't measure](#what-i-did-and-didnt-measure).
@@ -133,7 +151,9 @@ On Linux, `scripts/tune_linux.sh` prints the host setup (isolated cores, `nohz_f
 | Decision and to-wire latency, queue designs, page faults, encoding, dispatch | **Measured** on an Apple M1 Pro, macOS, loopback, unpinned (numbers above) |
 | Correct on Linux: build, 28 tests, 3-process demo + replay, fuzzing | **Verified** in Ubuntu 24.04 (GCC 13 / clang) under Docker |
 | Core isolation (`isolcpus`, `nohz_full`, IRQ affinity, pinning) | **Designed and scripted, not measured**: needs bare-metal x86 Linux |
-| 2 MB huge pages (TLB misses) | **Implemented** (`--huge`, hugetlbfs) **and scripted, not measured**: same reason |
+| 2 MB huge pages | **Measured** in a Linux VM: ~14% faster random reads than 4 KB pages, zero page faults. Hardware TLB-miss counts not measured (needs bare metal) |
+| CPU pinning, `mlockall` | **Verified working** on Linux (the engine reports `pinned=1 mlockall=1`); the effect on tail latency is part of the isolation experiment, not measured |
+| Profiling | **Done** with Valgrind callgrind; found and fixed a per-iteration clock read (−4.3% instructions) |
 | Kernel bypass, NIC hardware timestamps, FPGA | **Not built**: discussed in docs/DESIGN.md |
 
 If asked *"Did you measure `isolcpus`?"*, the honest answer is:

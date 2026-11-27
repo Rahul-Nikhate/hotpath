@@ -45,7 +45,11 @@ Each experiment: question → hypothesis → how to run → result → explanati
 |---|---|---|---|
 | lazy (M1, 16 KB pages) | 13.6 | 9.0 | 16,384 |
 | pre-faulted + mlock (M1) | **1.0** | 5.9 | 0 |
-| 2 MB huge pages (Linux) | | | |
+| 4 KB lazy (Linux VM) | 26.4 | 11.4 | 65,536 |
+| 4 KB pre-faulted (Linux VM) | 1.4 | 9.4 | 0 |
+| **2 MB huge pages (Linux VM)** | 1.2 | **8.1** | 0 |
+
+On Linux, 2 MB pages read ~14% faster at random than pre-faulted 4 KB pages: fewer TLB misses, because each entry covers 512× more memory. Hardware dTLB counters aren't available in a VM on a Mac, so the TLB explanation is inferred from the timing, not counted.
 
 - **Explanation:**
   - 16,384 faults = 256 MB ÷ 16 KB: Apple Silicon uses 16 KB pages (x86 Linux uses 4 KB, so expect 65,536 faults there).
