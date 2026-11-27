@@ -1,0 +1,7 @@
+build/
+results/
+journal*.bin
+*.csv
+*.png
+.DS_Store
+build-*/

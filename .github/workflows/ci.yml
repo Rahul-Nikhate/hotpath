@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# Hotpath builds project 1 (the market-data handler) from source as a library,
+# so both repositories are checked out side by side.
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Hotpath
+      - uses: actions/checkout@v4
+        with:
+          repository: Rahul-Nikhate/Low-Latency-Data-Handler
+          path: Low-Latency-Data-Handler
+      - name: Toolchain
+        run: $CXX --version
+      - name: Build (warnings are errors)
+        working-directory: Hotpath
+        run: make -j"$(nproc)" all
+      - name: Tests (unit, session, end-to-end with loss + disconnect + replay)
+        working-directory: Hotpath
+        run: make test
+      - name: Demo (3 processes + replay)
+        working-directory: Hotpath
+        run: COUNT=200000 ./scripts/run_demo.sh
+      # Recent Ubuntu kernels use more mmap ASLR bits than ASan/TSan tolerate.
+      - name: Allow sanitizer memory layout
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: ASan + UBSan
+        working-directory: Hotpath
+        run: make -j"$(nproc)" asan
+      - name: TSan
+        working-directory: Hotpath
+        run: make -j"$(nproc)" tsan
+      - name: Fuzz order-entry decoders (30 s)
+        if: matrix.cxx == 'clang++'
+        working-directory: Hotpath
+        run: FUZZ_SECONDS=30 make fuzz CXX=clang++
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Hotpath
+      - uses: actions/checkout@v4
+        with:
+          repository: Rahul-Nikhate/Low-Latency-Data-Handler
+          path: Low-Latency-Data-Handler
+      - name: Build (warnings are errors)
+        working-directory: Hotpath
+        run: make -j"$(sysctl -n hw.ncpu)" all
+      - name: Tests
+        working-directory: Hotpath
+        run: make test
