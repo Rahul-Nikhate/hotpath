@@ -5,3 +5,5 @@ journal*.bin
 *.png
 .DS_Store
 build-*/
+core
+core.*

@@ -81,7 +81,16 @@ int main(int argc, char** argv) {
     }
     const std::string name = a.str("name", "demo");
     const bool quiet = a.has("quiet");
-    Region region = Region::attach(name, a.has("huge"), 30'000);
+    Region region;
+    try {
+        region = Region::attach(name, a.has("huge"), 30'000);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr,
+                     "[control] cannot attach to instance '%s': %s\n"
+                     "          is hp_engine running with the same --name%s?\n",
+                     name.c_str(), e.what(), a.has("huge") ? "" : " (and if it uses --huge, pass --huge here too)");
+        return 1;
+    }
     auto* shm = static_cast<SharedLayout*>(region.data());
 
     // Wait until the engine has finished constructing the layout.
