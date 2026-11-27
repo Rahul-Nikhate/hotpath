@@ -2,14 +2,21 @@
 // readers retry if they overlap a write. Used for the control block (risk
 // limits + kill flag) that the control process writes and the fast path reads.
 //
-// Protocol:
-//   writer: seq = odd (relaxed) ; release fence ; write data ; seq = even (release)
-//   reader: s1 = seq (acquire) ; read data ; acquire fence ; s2 = seq ; retry if
-//           s1 is odd or s1 != s2
-// The data is stored as relaxed 64-bit atomics rather than copied with memcpy:
-// a plain memcpy that overlaps a write is formally a data race (UB) even though
-// the torn copy is thrown away. Word-wise relaxed atomics make it race-free and
-// keep ThreadSanitizer quiet, at no cost on x86/ARM (they compile to plain moves).
+// Protocol (fence-free variant):
+//   writer: seq = odd (relaxed) ; each data word stored with RELEASE ; seq = even (release)
+//   reader: s1 = seq (acquire) ; each data word loaded with ACQUIRE ; s2 = seq (relaxed) ;
+//           retry if s1 is odd or s1 != s2
+// Why it is correct: if the reader observes any word from a newer write, that
+// acquire load synchronizes with the word's release store, so the writer's
+// earlier "seq = odd" store is visible and s2 != s1 forces a retry. Acquire
+// loads also keep the s2 load from moving above the data loads.
+//
+// The classic version uses standalone atomic_thread_fence calls instead;
+// ThreadSanitizer cannot model those (GCC rejects them under -fsanitize=thread),
+// so per-word ordering is used. On x86 acquire/release are plain MOVs: same cost.
+// The data is stored as 64-bit atomics rather than copied with memcpy: a plain
+// memcpy that overlaps a write is formally a data race (UB) even though the
+// torn copy is thrown away.
 #pragma once
 
 #include <atomic>
@@ -33,8 +40,7 @@ public:
         std::memcpy(buf, &v, sizeof(T));
         const uint64_t s = seq_.load(std::memory_order_relaxed);
         seq_.store(s + 1, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_release);
-        for (size_t i = 0; i < kWords; ++i) words_[i].store(buf[i], std::memory_order_relaxed);
+        for (size_t i = 0; i < kWords; ++i) words_[i].store(buf[i], std::memory_order_release);
         seq_.store(s + 2, std::memory_order_release);
     }
 
@@ -43,8 +49,7 @@ public:
         const uint64_t s1 = seq_.load(std::memory_order_acquire);
         if (s1 & 1) return false;
         uint64_t buf[kWords];
-        for (size_t i = 0; i < kWords; ++i) buf[i] = words_[i].load(std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_acquire);
+        for (size_t i = 0; i < kWords; ++i) buf[i] = words_[i].load(std::memory_order_acquire);
         if (seq_.load(std::memory_order_relaxed) != s1) return false;
         std::memcpy(&out, buf, sizeof(T));
         return true;

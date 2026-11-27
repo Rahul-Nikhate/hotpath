@@ -67,7 +67,8 @@ int main(int argc, char** argv) {
     auto* shm = new (region.data()) SharedLayout();
     shm->hdr.layout_hash = layout_hash();
     shm->hdr.engine_pid = int64_t(::getpid());
-    std::atomic_thread_fence(std::memory_order_release);
+    // Publish last: the release store makes the constructed layout visible to the
+    // control process once it observes the magic value (it loads with acquire).
     reinterpret_cast<std::atomic<uint64_t>*>(&shm->hdr.magic)->store(kMagic, std::memory_order_release);
 
     // 2. Market data in, order entry out.
