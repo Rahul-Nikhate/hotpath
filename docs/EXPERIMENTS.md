@@ -82,6 +82,35 @@ On Linux, 2 MB pages read ~14% faster at random than pre-faulted 4 KB pages: few
 - **Status: not measured.** I haven't had a bare-metal x86 Linux host; Docker on a Mac can't isolate cores. The scripts are ready. In interviews I say exactly this rather than quoting an expected number as if it were measured.
 - **Expected outcome (a hypothesis, not a result):** the median barely changes, while p99.9 and max drop because timer ticks, IRQs and other tasks no longer land on the core.
 
+## 5. Profiling: where do the engine's instructions go?
+
+- **Question:** which functions dominate the fast path, and is any of that cost avoidable?
+- **Tool:** Valgrind callgrind, which counts instructions per function. It needs no hardware performance counters, so it works inside the Linux VM, where `perf`'s hardware events aren't available.
+- **Run** (Linux):
+  ```bash
+  valgrind --tool=callgrind --callgrind-out-file=cg.out \
+      ./build/hp_bench fastpath --msgs 300000 --sparse-msgs 50 --sparse-us 50 --no-thrash
+  callgrind_annotate --auto=no --inclusive=no cg.out | head -40
+  ```
+- **Findings** (shares of the engine's own instructions, excluding the synthetic feed generator, which is test-harness cost):
+
+| Hotspot | Share | What it means |
+|---|---|---|
+| `steady_clock::now()` / `clock_gettime` | ~7% | Read on **every** loop iteration, though only ~100 µs maintenance ticks need it. **Avoidable** |
+| `malloc` / `free` / `operator new` | ~12% | Project 1's `std::map` + `unordered_map` order book allocates per order. The known limitation, now quantified |
+| Latency histogram recording | ~9% | The cost of measuring; kept on purpose |
+| Strategy decision | ~5% | Expected |
+
+- **Fix and re-measurement** (same command, same inputs):
+
+| | Before | After |
+|---|---|---|
+| Total instructions | 231.0 M | 221.1 M (**−4.3%**) |
+| Clock-read instructions | ~15.6 M | ~4.2 M (**−73%**) |
+
+  The loop now checks the CPU cycle counter and reads the real clock only when maintenance is due (`src/engine/fast_path.h`, `step()`). All 28 tests pass unchanged.
+- **Next target:** the allocator share, by replacing project 1's map-based book with a flat price-level array and an order pool.
+
 ## Stretch 5. Nagle + delayed ACK
 
 Not implemented as a switch: `TCP_NODELAY` is always on, set by project 1's `tcp_connect`. To demonstrate the stall, remove it and watch to-wire latency jump to tens of milliseconds whenever two small orders go out back to back.

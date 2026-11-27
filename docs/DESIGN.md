@@ -42,7 +42,7 @@ Shared memory between engine and control (`src/shm/layout.h`):
 4. `FastPath::on_order` → `Gateway::send_order` patches 16 bytes of a pre-built 24-byte frame and calls `send()` once (`TCP_NODELAY`).
 5. **Only now** is the journal written: the market record (held back) and the order record. Journaling is off the tick-to-order path, yet the journal order is exactly the order the core saw.
 6. Order responses are polled and applied to the order manager; each is journaled.
-7. Every ~100 µs (cold path):
+7. Every ~100 µs (cold path). The loop decides this by reading the CPU cycle counter (one register read), not the system clock. The real clock is read only when maintenance is due: profiling showed the old per-iteration `steady_clock::now()` at ~7% of the engine's instructions (see EXPERIMENTS.md, "Profiling"). Maintenance covers:
    - gateway heartbeats and reconnects
    - the control seqlock's sequence word
    - trading gating
